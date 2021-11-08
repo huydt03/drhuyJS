@@ -1,3 +1,9 @@
+// @return 
+// 	EventHandle: function(hook: array.str)
+// 	createElement: function(object: {_type, childs, text, ...element_properties})
+// 	fastCreateElement: function('type', 'attr=xxx|class=dff dff}', '.innerHTML')
+// 	ajax: function('/url', 'method', fCallback, {success, fail})
+// 	'onCreateElement','onBeforeAjax', 'onAfterAjax', 'onAjaxSuccess', 'onAjaxFail', 'onStartAjax', 'onEndedAjax'
 let Drhuy = (function(){
 
 	let Helper = (function(){
@@ -10,8 +16,9 @@ let Drhuy = (function(){
 		}
 
 		function strToAttrs(str){
+			const CHAR_SPLIT = '|'
 			let result = {};
-			let attrs = str.split(' ');
+			let attrs = str.split(CHAR_SPLIT);
 			for (var i = 0; i < attrs.length; i++) {
 				let attr = attrs[i].split('=');
 				if(!attr[0] || !attr[1])
@@ -25,6 +32,9 @@ let Drhuy = (function(){
 	})();
 
 	function EventHandle(hooks = []){
+
+		if(typeof hooks != 'object')
+			hooks = arguments;
 
 		const HOOK_EMPTY = 'empty';
 
@@ -94,8 +104,16 @@ let Drhuy = (function(){
 		return events;
 
 	}
+
+	let self = new EventHandle([
+		'onCreateElement',
+		'onBeforeAjax', 'onAfterAjax', 'onAjaxSuccess', 'onAjaxFail', 'onStartAjax', 'onEndedAjax'
+	]);
+
+	self.EventHandle = EventHandle;
+
 	
-	function createElement(params = {}){
+	self.createElement = function(params = {}){
 		let tbDefaultSkips = Helper.arrToObject(['_type', 'items', 'childs', 'text', 'tbAttrSkip']);
 		let tbAttrSkip = {...params.tbAttrSkip, ...tbDefaultSkips}
 
@@ -130,17 +148,18 @@ let Drhuy = (function(){
 		if(params.childs){
 			for(i in params.childs){
 				let oChild = params.childs[i];
-				eChild = oChild.appendChild? oChild: createElement(oChild);
+				eChild = oChild.appendChild? oChild: self.createElement(oChild);
 				el.appendChild(eChild);
 			}
 		}
+		self.fire('onCreateElement', el);
 		return el;
 	};
 
-	function fastCreateElement(params = []){
+	self.fastCreateElement = function(params = null){
 
 		if(typeof params != 'object')
-			params = [params];
+			params = arguments;
 
 		let _type = 'div';
 		let attrs = null;
@@ -161,18 +180,99 @@ let Drhuy = (function(){
 			else _type = params[i];
 		}
 
-		let el = createElement({...attrs, _type, text});
+		let el = self.createElement({...attrs, _type, text});
 
 		if(childs)
 			for(i in childs){
 				let oChild = childs[i];
-				eChild = oChild.appendChild? oChild: fastCreateElement(oChild)
+				eChild = oChild.appendChild? oChild: self.fastCreateElement(oChild)
 				el.appendChild(eChild);
 			}
 
 		return el;
 	}
 
-	return {createElement, fastCreateElement, EventHandle};
+	let ajaxStacks = [];
+	let nAjaxAction = 0;
+
+	self.ajax = async function(params = null, isStack = 0) {
+		if(typeof params != 'object')
+			params = arguments;
+
+		if(!nAjaxAction)
+			self.fire('onStartAjax')
+
+		if(!isStack)
+			ajaxStacks.push(params);
+
+		if(!isStack && ajaxStacks.length > 1)
+			return;
+
+		let szUrl = '/';
+		let szMethod = 'GET';
+		let data = {};
+		let fCallback = function(){};
+		let callback = {};
+		self.fire('onBeforeAjax', {
+			nAction: nAjaxAction,
+			nTotal: ajaxStacks.length
+		});
+
+		for(i in params){
+			if(typeof params[i] == 'object'){
+				if(params[i].success || params[i].fail)
+					callback = params[i];
+				else
+					data = params[i];
+				continue;
+			}
+			if(typeof params[i] == 'function'){
+				fCallback = params[i];
+				continue;
+			}
+			if(params[i].includes('/')){
+				szUrl = params[i];
+				continue;
+			}
+			else szMethod = params[i];
+		}
+
+		var xhttp = new XMLHttpRequest() || ActiveXObject("Microsoft.XMLHTTP");
+		xhttp.onloadend = function(){
+			self.fire('onAfterAjax', {self: this, ...{
+			nAction: nAjaxAction,
+			nTotal: ajaxStacks.length
+		}});
+			if(ajaxStacks[++nAjaxAction])
+				self.ajax(ajaxStacks[nAjaxAction], isStack = 1);
+			else{
+				self.fire('onEndedAjax');
+				ajaxStacks = [];
+				nAjaxAction = 0;
+			}
+		}
+		data = new URLSearchParams(data).toString();
+		if(szMethod == 'GET')
+			szUrl += `?${data}`;
+		xhttp.onreadystatechange = await function(){
+			fCallback(this);
+			if (this.readyState == 4 && this.status == 200){
+            	self.fire('onAjaxSuccess', this);
+            	if(typeof callback.success == 'function')
+            		callback.success(this);
+			}else{
+            	self.fire('onAjaxFail', this);
+            	if(typeof callback.fail == 'function')
+            		callback.fail(this);
+            }
+		};
+		xhttp.open(szMethod, szUrl, true);
+		xhttp.setRequestHeader("Content-type", "application/x-www-form-urlencoded");
+		xhttp.send(data);
+
+		
+	}
+
+	return self;
 
 })();
